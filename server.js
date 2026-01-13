@@ -106,6 +106,28 @@ fastify.post('/update-status', async (request, reply) => {
   return { success: true };
 });
 
+// 📊 API: Estadísticas del Día (FASE 3 - Dashboard)
+fastify.get('/stats/today', async (request, reply) => {
+  const today = new Date().toISOString().split('T')[0];
+  
+  const stats = db.prepare(`
+    SELECT 
+      COALESCE(ig_messages_sent, 0) as ig_enviados,
+      COALESCE(wa_messages_sent, 0) as wa_enviados
+    FROM daily_stats 
+    WHERE date = ?
+  `).get(today) || { ig_enviados: 0, wa_enviados: 0 };
+  
+  const total_leads = db.prepare('SELECT COUNT(*) as count FROM leads').get();
+  const respondieron = db.prepare("SELECT COUNT(*) as count FROM leads WHERE status = 'respondio'").get();
+  
+  return {
+    mensajes_enviados: stats.ig_enviados + stats.wa_enviados,
+    respuestas_ia: respondieron.count,
+    total_leads: total_leads.count,
+    fecha: today
+  };
+});
 const start = async () => {
   try {
     await fastify.listen({ port: 3000, host: '0.0.0.0' });
@@ -116,3 +138,4 @@ const start = async () => {
   }
 };
 start();
+
