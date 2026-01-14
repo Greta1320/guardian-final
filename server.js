@@ -128,17 +128,6 @@ fastify.get('/stats/today', async (request, reply) => {
     fecha: today
   };
 });
-const start = async () => {
-  try {
-    await fastify.listen({ port: 3000, host: '0.0.0.0' });
-    console.log(`Guardian activado en http://0.0.0.0:3000`);
-  } catch (err) {
-    fastify.log.error(err);
-    process.exit(1);
-  }
-};
-start();
-
 // 📋 API: Obtener Leads (CRM)
 fastify.get('/leads', async (request, reply) => {
   const { status } = request.body || request.query || {}; 
@@ -152,3 +141,16 @@ fastify.get('/leads', async (request, reply) => {
   const leads = db.prepare(query).all(...params);
   return leads;
 });
+
+
+const start = async () => {
+  try {
+    await fastify.listen({ port: 3000, host: '0.0.0.0' });
+    console.log(`Guardian activado en http://0.0.0.0:3000`);
+  } catch (err) {
+    fastify.log.error(err);
+    process.exit(1);
+  }
+};
+start();
+
