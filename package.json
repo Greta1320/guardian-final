@@ -1,7 +1,11 @@
 {
   "name": "guardian",
   "dependencies": {
-  "fastify": "^4.24.3",
-  "better-sqlite3": "^9.0.0", 
-  "@fastify/cors": "^8.0.0"
-},
+    "fastify": "^4.24.3",
+    "better-sqlite3": "^9.0.0",
+    "@fastify/cors": "^8.0.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}
