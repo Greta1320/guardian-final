@@ -1,4 +1,8 @@
 const fastify = require('fastify')({ logger: true });
+fastify.register(require('@fastify/cors'), { 
+  origin: '*'
+});
+// --------------------
 const Database = require('better-sqlite3');
 const path = require('path');
 
@@ -153,4 +157,5 @@ const start = async () => {
   }
 };
 start();
+
 
