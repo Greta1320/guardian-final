@@ -139,3 +139,16 @@ const start = async () => {
 };
 start();
 
+// 📋 API: Obtener Leads (CRM)
+fastify.get('/leads', async (request, reply) => {
+  const { status } = request.body || request.query || {}; 
+  let query = 'SELECT * FROM leads';
+  const params = [];
+  if (status) {
+    query += ' WHERE status = ?';
+    params.push(status);
+  }
+  query += ' ORDER BY last_contacted_at DESC LIMIT 50';
+  const leads = db.prepare(query).all(...params);
+  return leads;
+});
