@@ -5,6 +5,12 @@ fastify.register(require('@fastify/cors'), {
 // --------------------
 const Database = require('better-sqlite3');
 const path = require('path');
+const OpenAI = require('openai');
+
+// Initialize OpenAI
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
 // En producción (EasyPanel), usaríamos volúmenes persistentes o conectaríamos a Postgres.
 // Para este MVP, usamos SQLite local en el contenedor.
@@ -22,6 +28,8 @@ db.exec(`
     platform TEXT NOT NULL, -- 'instagram' | 'whatsapp'
     handle TEXT NOT NULL,   -- @usuario o telefono
     status TEXT DEFAULT 'nuevo',
+    intent TEXT DEFAULT NULL, -- 'aprender' | 'sistemas' | 'info' | 'desconfianza' | NULL
+    score INTEGER DEFAULT 0, -- 0-10 scoring automático
     interaction_count INTEGER DEFAULT 0,
     last_contacted_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -146,6 +154,142 @@ fastify.get('/leads', async (request, reply) => {
   return leads;
 });
 
+// 🔥 API: Obtener Leads Calientes (score >= 6)
+fastify.get('/leads/hot', async (request, reply) => {
+  const leads = db.prepare('SELECT * FROM leads WHERE score >= 6 ORDER BY score DESC, last_contacted_at DESC LIMIT 20').all();
+  return leads;
+});
+
+// 🤖 API: Clasificar Intención del Lead
+fastify.post('/ai/classify-intent', async (request, reply) => {
+  const { message, handle, platform } = request.body;
+  
+  if (!message) {
+    return reply.code(400).send({ error: 'message is required' });
+  }
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `Sos un clasificador de intenciones para leads de trading/inversiones. 
+Clasificá el mensaje en UNA de estas categorías:
+- "aprender": quiere aprender a operar/tradear
+- "sistemas": quiere sistemas automatizados/managed accounts
+- "info": solo curiosidad, pidiendo info general
+- "desconfianza": menciona estafas, desconfianza, miedo
+- "tiene_broker": ya opera o tiene broker
+- "sin_capital": no tiene dinero para invertir
+- "promesas": busca ganancias garantizadas o números mágicos
+
+Respondé SOLO con la categoría, nada más.`
+        },
+        {
+          role: 'user',
+          content: message
+        }
+      ],
+      temperature: 0.3,
+      max_tokens: 20
+    });
+
+    const intent = completion.choices[0].message.content.trim().toLowerCase();
+    
+    // Actualizar intent en la DB si se proveyó handle y platform
+    if (handle && platform) {
+      const id = `${platform}_${handle}`;
+      db.prepare('UPDATE leads SET intent = ? WHERE id = ?').run(intent, id);
+    }
+
+    return { intent, message };
+  } catch (error) {
+    fastify.log.error(error);
+    return reply.code(500).send({ error: 'OpenAI API error', details: error.message });
+  }
+});
+
+// 💬 API: Generar Respuesta Personalizada
+fastify.post('/ai/generate-response', async (request, reply) => {
+  const { lead_context, user_message, intent } = request.body;
+  
+  if (!user_message) {
+    return reply.code(400).send({ error: 'user_message is required' });
+  }
+
+  try {
+    const systemPrompt = `Rol: Sos un asesor senior de One Percent. Tu función NO es vender, es iniciar conversaciones naturales, calificar interés y derivar solo a leads de alta intención.
+Tono: Humano, cercano, profesional, cero presión. Escribís como una persona real, no como un bot ni vendedor agresivo.
+Objetivo: Detectar si la persona tiene interés REAL en automatizar operaciones, generar ingresos con sistemas asistidos, o aprender trading profesional.
+
+REGLAS CLAVE:
+1. NUNCA hables de precios ni hagas ofertas
+2. NUNCA envíes links en el primer mensaje
+3. NUNCA pidas una llamada en el primer mensaje
+4. Máximo 2 preguntas por mensaje
+5. Mensajes cortos (máximo 3 líneas)
+6. Si no hay interés real, cerrás con respeto
+
+Intención detectada: ${intent || 'desconocida'}
+
+Contexto del lead: ${JSON.stringify(lead_context || {})}`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: user_message }
+      ],
+      temperature: 0.7,
+      max_tokens: 150
+    });
+
+    const response = completion.choices[0].message.content.trim();
+    return { response, intent };
+  } catch (error) {
+    fastify.log.error(error);
+    return reply.code(500).send({ error: 'OpenAI API error', details: error.message });
+  }
+});
+
+// 📊 API: Actualizar Score del Lead
+fastify.post('/leads/update-score', async (request, reply) => {
+  const { platform, handle, intent, has_capital, responds_fast } = request.body;
+  
+  if (!platform || !handle) {
+    return reply.code(400).send({ error: 'platform and handle are required' });
+  }
+
+  // Calcular score (0-10)
+  let score = 0;
+  
+  // Intent scoring
+  if (intent === 'sistemas') score += 3;
+  else if (intent === 'aprender') score += 2;
+  else if (intent === 'tiene_broker') score += 2;
+  else if (intent === 'promesas') score -= 3;
+  else if (intent === 'sin_capital') score -= 2;
+  
+  // Behavioral scoring
+  if (has_capital) score += 3;
+  if (responds_fast) score += 1;
+  
+  // Get lead to check interaction count
+  const id = `${platform}_${handle}`;
+  const lead = db.prepare('SELECT interaction_count FROM leads WHERE id = ?').get(id);
+  
+  if (lead && lead.interaction_count >= 2) score += 1; // Engagement bonus
+  
+  // Clamp score 0-10
+  score = Math.max(0, Math.min(10, score));
+  
+  // Update DB
+  db.prepare('UPDATE leads SET score = ? WHERE id = ?').run(score, id);
+  
+  return { score, id };
+});
+
 
 const start = async () => {
   try {
@@ -157,5 +301,9 @@ const start = async () => {
   }
 };
 start();
+
+
+ "Add AI endpoints for intent classification and scoring"
+
 
 
