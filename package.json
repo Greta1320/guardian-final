@@ -10,4 +10,3 @@
     "start": "node server.js"
   }
 }
-"Add OpenAI dependency"
