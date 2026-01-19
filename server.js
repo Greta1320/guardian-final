@@ -1,5 +1,5 @@
 const fastify = require('fastify')({ logger: true });
-fastify.register(require('@fastify/cors'), { 
+fastify.register(require('@fastify/cors'), {
   origin: '*'
 });
 // --------------------
@@ -49,7 +49,7 @@ fastify.post('/can-contact', async (request, reply) => {
 
   // 1. Verificar Estadísticas Diarias
   const stats = db.prepare('SELECT * FROM daily_stats WHERE date = ?').get(today) || { ig_messages_sent: 0, wa_messages_sent: 0 };
-  
+
   if (platform === 'instagram' && stats.ig_messages_sent >= MAX_DAILY_MESSAGES_IG) {
     return { sensitive: true, allowed: false, reason: 'daily_limit_reached', current: stats.ig_messages_sent, max: MAX_DAILY_MESSAGES_IG };
   }
@@ -67,7 +67,7 @@ fastify.post('/can-contact', async (request, reply) => {
   if (lead.status === 'stop' || lead.status === 'dnd') {
     return { allowed: false, reason: 'lead_opt_out' };
   }
-  
+
   if (lead.status === 'respondio') {
     return { allowed: true, reason: 'ongoing_conversation' }; // Si ya respondió, la IA toma el control sin límites de "cold outreach"
   }
@@ -113,7 +113,7 @@ fastify.post('/log-attempt', async (request, reply) => {
 fastify.post('/update-status', async (request, reply) => {
   const { platform, handle, status } = request.body;
   const id = `${platform}_${handle}`;
-  
+
   db.prepare('UPDATE leads SET status = ? WHERE id = ?').run(status, id);
   return { success: true };
 });
@@ -121,7 +121,7 @@ fastify.post('/update-status', async (request, reply) => {
 // 📊 API: Estadísticas del Día (FASE 3 - Dashboard)
 fastify.get('/stats/today', async (request, reply) => {
   const today = new Date().toISOString().split('T')[0];
-  
+
   const stats = db.prepare(`
     SELECT 
       COALESCE(ig_messages_sent, 0) as ig_enviados,
@@ -129,10 +129,10 @@ fastify.get('/stats/today', async (request, reply) => {
     FROM daily_stats 
     WHERE date = ?
   `).get(today) || { ig_enviados: 0, wa_enviados: 0 };
-  
+
   const total_leads = db.prepare('SELECT COUNT(*) as count FROM leads').get();
   const respondieron = db.prepare("SELECT COUNT(*) as count FROM leads WHERE status = 'respondio'").get();
-  
+
   return {
     mensajes_enviados: stats.ig_enviados + stats.wa_enviados,
     respuestas_ia: respondieron.count,
@@ -142,7 +142,7 @@ fastify.get('/stats/today', async (request, reply) => {
 });
 // 📋 API: Obtener Leads (CRM)
 fastify.get('/leads', async (request, reply) => {
-  const { status } = request.body || request.query || {}; 
+  const { status } = request.body || request.query || {};
   let query = 'SELECT * FROM leads';
   const params = [];
   if (status) {
@@ -163,7 +163,7 @@ fastify.get('/leads/hot', async (request, reply) => {
 // 🤖 API: Clasificar Intención del Lead
 fastify.post('/ai/classify-intent', async (request, reply) => {
   const { message, handle, platform } = request.body;
-  
+
   if (!message) {
     return reply.code(400).send({ error: 'message is required' });
   }
@@ -196,7 +196,7 @@ Respondé SOLO con la categoría, nada más.`
     });
 
     const intent = completion.choices[0].message.content.trim().toLowerCase();
-    
+
     // Actualizar intent en la DB si se proveyó handle y platform
     if (handle && platform) {
       const id = `${platform}_${handle}`;
@@ -213,7 +213,7 @@ Respondé SOLO con la categoría, nada más.`
 // 💬 API: Generar Respuesta Personalizada
 fastify.post('/ai/generate-response', async (request, reply) => {
   const { lead_context, user_message, intent } = request.body;
-  
+
   if (!user_message) {
     return reply.code(400).send({ error: 'user_message is required' });
   }
@@ -256,38 +256,119 @@ Contexto del lead: ${JSON.stringify(lead_context || {})}`;
 // 📊 API: Actualizar Score del Lead
 fastify.post('/leads/update-score', async (request, reply) => {
   const { platform, handle, intent, has_capital, responds_fast } = request.body;
-  
+
   if (!platform || !handle) {
     return reply.code(400).send({ error: 'platform and handle are required' });
   }
 
   // Calcular score (0-10)
   let score = 0;
-  
+
   // Intent scoring
   if (intent === 'sistemas') score += 3;
   else if (intent === 'aprender') score += 2;
   else if (intent === 'tiene_broker') score += 2;
   else if (intent === 'promesas') score -= 3;
   else if (intent === 'sin_capital') score -= 2;
-  
+
   // Behavioral scoring
   if (has_capital) score += 3;
   if (responds_fast) score += 1;
-  
+
   // Get lead to check interaction count
   const id = `${platform}_${handle}`;
   const lead = db.prepare('SELECT interaction_count FROM leads WHERE id = ?').get(id);
-  
+
   if (lead && lead.interaction_count >= 2) score += 1; // Engagement bonus
-  
+
   // Clamp score 0-10
   score = Math.max(0, Math.min(10, score));
-  
+
   // Update DB
   db.prepare('UPDATE leads SET score = ? WHERE id = ?').run(score, id);
-  
+
   return { score, id };
+});
+
+// 🎯 API: Analizar Perfil de Instagram
+fastify.post('/ai/analyze-instagram-profile', async (request, reply) => {
+  const { username, bio, recent_posts_text, followers, is_business } = request.body;
+
+  if (!username || !bio) {
+    return reply.code(400).send({ error: 'username and bio are required' });
+  }
+
+  try {
+    const analysisPrompt = `Analizá este perfil de Instagram y evaluá si es un lead calificado para servicios de trading/inversión.
+
+Username: ${username}
+Bio: ${bio}
+Posts recientes: ${recent_posts_text || 'N/A'}
+Followers: ${followers || 'desconocido'}
+Tipo de cuenta: ${is_business ? 'Business' : 'Personal'}
+
+Criterios de evaluación (score 0-10):
++3: Menciona trading, inversión, finanzas, crypto en bio o posts
++2: Keywords relacionados (broker, mercados, emprendimiento tech)
++1: Alto engagement (señal de influencia)
++1: Cuenta Business (más serio)
++1: Lifestyle que indica capital (viajes, tech, lujos)
++1: Menciona aprendizaje o desarrollo personal
+-2: Señales de MLM o crypto scams
+-2: Muy bajo engagement (posible bot)
+-1: Bio genérica sin información relevante
+
+Intenciones posibles:
+- "aprender_trading": Quiere aprender a operar
+- "sistemas_automatizados": Busca automatización/no tiene tiempo
+- "curioso": Solo curiosidad general
+- "emprendedor": Perfil emprendedor (posible lead)
+- "no_calificado": No encaja con el perfil
+
+Respondé en formato JSON válido:
+{
+  "score": [número 0-10],
+  "predicted_intent": "[intención detectada]",
+  "intent_probabilities": {
+    "aprender_trading": [0-1],
+    "sistemas_automatizados": [0-1]
+  },
+  "signals": {
+    "positive": ["señal positiva 1", "señal positiva 2"],
+    "negative": ["señal negativa 1"]
+  },
+  "suggested_opener": "[mensaje en español argentino, máx 2 líneas, casual y humano]",
+  "nicho_detectado": "[trading/crypto/inversiones/emprendimiento/otro]"
+}`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: 'Sos un experto en analizar perfiles de Instagram para calificar leads de trading e inversiones. Respondés siempre en JSON válido.'
+        },
+        {
+          role: 'user',
+          content: analysisPrompt
+        }
+      ],
+      temperature: 0.5,
+      max_tokens: 400,
+      response_format: { type: "json_object" }
+    });
+
+    const analysis = JSON.parse(completion.choices[0].message.content);
+
+    // Agregar metadata
+    analysis.username = username;
+    analysis.analyzed_at = new Date().toISOString();
+
+    return analysis;
+  } catch (error) {
+    fastify.log.error(error);
+    return reply.code(500).send({ error: 'OpenAI API error', details: error.message });
+  }
 });
 
 
@@ -301,9 +382,3 @@ const start = async () => {
   }
 };
 start();
-
-
- "Add AI endpoints for intent classification and scoring"
-
-
-
